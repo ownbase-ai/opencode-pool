@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "share": "disabled",
+  "snapshot": false,
+  "model": "anthropic/claude-sonnet-4-5",
+  "small_model": "anthropic/claude-haiku-4-5",
+  "server": {
+    "port": 4096,
+    "hostname": "0.0.0.0"
+  },
+  "permission": {
+    "*": "allow"
+  }
+}

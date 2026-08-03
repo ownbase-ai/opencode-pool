@@ -1,0 +1,59 @@
+# Fragment for the Base's ownbase.yaml.
+# Merge under services:, adjust domains/replicas/ref, then:
+#   ownbasectl deploy <base> opencode --ref <sha>
+#   ownbasectl deploy <base> harness  --ref <sha>
+#   ownbasectl secrets set <base> opencode ANTHROPIC_API_KEY=...
+#
+# Requires OwnBase with replicas: support (PR #24 / main after merge).
+# postgres must already be declared (OwnBase seeds it by default).
+
+# services:
+  opencode:
+    repo: git@github.com:ownbase-ai/opencode-pool.git
+    ref: REPLACE_WITH_COMMIT_SHA
+    context: worker
+    port: 4096
+    internal: true
+    domain: opencode.example.com
+    replicas: 4
+    health_probe:
+      http: /global/health
+    env:
+      - OPENCODE_DISABLE_AUTOUPDATE=true
+      - GIT_AUTHOR_EMAIL=agents@example.com
+    # Do NOT set OPENCODE_SERVER_PASSWORD — OwnBase probes /global/health
+    # without basic auth; a 401 fails the whole reconcile plan.
+    generated_secrets:
+      - type: ssh-ed25519
+        public_key: WORKER_GIT_PUBKEY
+        private_key: WORKER_GIT_KEY_B64
+        private_encoding: base64
+    volumes:
+      - name: state
+        mount: /home/opencode/.local/share/opencode
+        backup: ["."]
+      - name: workspaces
+        mount: /workspaces
+        backup: ["."]
+    # After OwnBase resources: lands:
+    # resources:
+    #   memory: 4g
+    #   cpus: "2"
+
+  harness:
+    repo: git@github.com:ownbase-ai/opencode-pool.git
+    ref: REPLACE_WITH_COMMIT_SHA
+    context: harness
+    port: 8080
+    domain: agents.example.com
+    requires:
+      - opencode
+      - postgres
+    database: postgres/harness
+    health_probe:
+      http: /health
+    env:
+      # Must match opencode.replicas above (OwnBase does not inject this yet).
+      - OPENCODE_REPLICAS=4
+      - OPENCODE_SERVICE=opencode
+      - OPENCODE_PORT=4096
