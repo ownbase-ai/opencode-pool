@@ -35,10 +35,10 @@
       - name: workspaces
         mount: /workspaces
         backup: ["."]
-    # After OwnBase resources: lands:
-    # resources:
-    #   memory: 4g
-    #   cpus: "2"
+    # Requires OwnBase with resources: (PR resources-memory-cpus or later main).
+    resources:
+      memory: 4g
+      cpus: "2"
 
   harness:
     repo: git@github.com:ownbase-ai/opencode-pool.git
