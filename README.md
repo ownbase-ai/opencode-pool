@@ -91,6 +91,98 @@ ownbasectl secrets get <base> opencode WORKER_GIT_PUBKEY
 
 Affinity is stored in Postgres (`session.worker_idx`) and **never changes**. Worker state volumes make that sound across restarts.
 
+## Client: run a turn and read the result
+
+Talk only to the **harness** (public). It picks a worker, stores affinity, and proxies OpenCode’s session API. The workspace path must already exist on that worker’s volume (clone it first, or have an agent create it).
+
+### Sync (recommended day-1)
+
+One request blocks until the agent finishes the turn; the response body *is* the result.
+
+```bash
+HARNESS=https://agents.example.com
+
+# 1. Place a session (directory = absolute path ON the worker)
+sid=$(curl -fsS -X POST "$HARNESS/v1/sessions" \
+  -H 'content-type: application/json' \
+  -d '{"directory":"/workspaces/myrepo","title":"fix"}' | jq -r .id)
+
+# 2. Send a user message; wait for the full assistant turn
+curl -fsS -X POST "$HARNESS/v1/sessions/$sid/messages" \
+  -H 'content-type: application/json' \
+  -d '{
+    "parts": [{"type":"text","text":"Summarize the README in three bullets"}]
+  }' | jq .
+```
+
+**Request body** (OpenCode `POST /session/:id/message`):
+
+| Field | Required | Notes |
+|---|---|---|
+| `parts` | yes | At least one part. Text: `{ "type":"text", "text":"..." }` |
+| `model` | no | `{ "providerID":"anthropic", "modelID":"claude-sonnet-4-5" }` |
+| `agent` | no | OpenCode agent name |
+| `system` | no | Extra system prompt for this turn |
+
+**Response** (`200`):
+
+```json
+{
+  "info": { /* AssistantMessage metadata */ },
+  "parts": [
+    { "type": "text", "text": "…" },
+    { "type": "tool", /* … */ },
+    { "type": "reasoning", /* … */ }
+  ]
+}
+```
+
+- Assistant prose: `parts[]` where `type == "text"`.
+- Tool calls / other steps: same array (`tool`, `reasoning`, `step-start`, …).
+- Which replica ran it: response header `x-ownbase-worker`.
+- Follow-ups: `POST` again with the **same** `$sid` — harness always routes to the same worker.
+
+```bash
+# Extract concatenated assistant text
+curl -fsS -X POST "$HARNESS/v1/sessions/$sid/messages" \
+  -H 'content-type: application/json' \
+  -d '{"parts":[{"type":"text","text":"What files changed?"}]}' \
+  | jq -r '[.parts[] | select(.type=="text") | .text] | join("\n")'
+```
+
+Abort an in-flight sync turn (from another client):
+
+```bash
+curl -fsS -X POST "$HARNESS/v1/sessions/$sid/abort"
+```
+
+### Async (progressive UI)
+
+```bash
+# Accept immediately (204); agent keeps running on the affine worker
+curl -fsS -o /dev/null -w '%{http_code}\n' -X POST \
+  "$HARNESS/v1/sessions/$sid/prompt_async" \
+  -H 'content-type: application/json' \
+  -d '{"parts":[{"type":"text","text":"…"}]}'
+
+# Poll message history (proxied to the worker)
+curl -fsS "$HARNESS/v1/sessions/$sid/message" | jq .
+
+# Or SSE event stream (proxied OpenCode /event)
+curl -N "$HARNESS/v1/sessions/$sid/event"
+```
+
+`prompt_async` does **not** return the assistant text in the body. Read it from history or SSE after the fact.
+
+### What the harness does on each message
+
+1. Resolve `session_id` → `worker_idx` (immutable affinity).  
+2. Acquire a per-worker **lease** (409 if that worker is already mid-turn).  
+3. `POST` to `http://ownbase-opencode-<idx>:4096/session/:id/message?directory=…`.  
+4. Return upstream JSON; release the lease.
+
+Model credentials live on the **worker** (`ownbasectl secrets set <base> opencode ANTHROPIC_API_KEY=…`), not on the client.
+
 ## Worker image
 
 - Debian bookworm, non-root UID 1000  
