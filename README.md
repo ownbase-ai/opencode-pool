@@ -56,10 +56,18 @@ Requires OwnBase with `replicas:` (PR [#24](https://github.com/ownbase-ai/ownbas
    # keep harness env OPENCODE_REPLICAS in sync, then redeploy harness
    ```
 
-5. Smoke:
+5. Copy the harness Bearer token (generated on first deploy):
 
    ```bash
-   HARNESS_URL=https://agents.example.com ./scripts/smoke.sh
+   ownbasectl secrets get <base> harness HARNESS_TOKEN
+   ```
+
+6. Smoke:
+
+   ```bash
+   HARNESS_URL=https://agents.example.com \
+   HARNESS_TOKEN=$(ownbasectl secrets get <base> harness HARNESS_TOKEN) \
+     ./scripts/smoke.sh
    ```
 
 ### Why `OPENCODE_REPLICAS` is duplicated
@@ -76,9 +84,12 @@ ownbasectl secrets get <base> opencode WORKER_GIT_PUBKEY
 
 ## Harness API
 
+All `/v1/*` routes require `Authorization: Bearer <HARNESS_TOKEN>`.  
+`GET /health` stays open for OwnBase probes. Session `directory` must resolve under `/workspaces` (override with `WORKSPACE_ROOT`).
+
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/health` | OwnBase probe; 200 if ≥1 worker healthy |
+| `GET` | `/health` | OwnBase probe; unauthenticated |
 | `GET` | `/v1/workers` | Registry snapshot |
 | `POST` | `/v1/workers/:i/drain` | `{ "draining": true\|false }` before scale/deploy |
 | `GET` | `/v1/sessions` | Harness-side index |
@@ -87,7 +98,7 @@ ownbasectl secrets get <base> opencode WORKER_GIT_PUBKEY
 | `POST` | `/v1/sessions/:id/messages` | Sync turn; holds per-worker lease |
 | `POST` | `/v1/sessions/:id/prompt_async` | Async turn |
 | `POST` | `/v1/sessions/:id/abort` | Abort + release lease |
-| `*` | `/v1/sessions/:id/*` | Proxied to the affine worker (SDK escape hatch) |
+| `*` | `/v1/sessions/:id/*` | Proxied allowlist to the affine worker (SDK escape hatch; no client headers forwarded) |
 
 Affinity is stored in Postgres (`session.worker_idx`) and **never changes**. Worker state volumes make that sound across restarts.
 

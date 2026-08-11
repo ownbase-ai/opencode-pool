@@ -1,3 +1,4 @@
+import { allowDirectory } from "../auth"
 import { pickWorker } from "../workers/registry"
 import {
   HarnessError,
@@ -24,10 +25,16 @@ export async function createSession(req: Request): Promise<Response> {
     body = (await req.json()) as CreateBody
   }
 
-  const directory = body.directory ?? null
-  if (!directory) {
-    return Response.json({ error: "directory is required (absolute path on the worker, e.g. /workspaces/myrepo)" }, { status: 400 })
+  const rawDir = body.directory ?? null
+  if (!rawDir) {
+    return Response.json(
+      { error: "directory is required (absolute path on the worker, e.g. /workspaces/myrepo)" },
+      { status: 400 },
+    )
   }
+  const allowed = allowDirectory(rawDir)
+  if (allowed instanceof Response) return allowed
+  const directory = allowed
 
   const worker = await pickWorker()
   if (!worker) {
@@ -176,23 +183,73 @@ export async function abortSession(sessionID: string): Promise<Response> {
   })
 }
 
+/** Allowed path suffixes on the SDK escape hatch (after /v1/sessions/:id). */
+const PROXY_SUFFIX_ALLOW = new Set([
+  "/message",
+  "/messages",
+  "/prompt",
+  "/prompt_async",
+  "/abort",
+  "/diff",
+  "/todo",
+  "/event",
+  "/children",
+  "/share",
+  "/revert",
+  "/summarize",
+  "/permissions",
+])
+
 export async function proxySessionPath(
   sessionID: string,
   suffix: string,
   req: Request,
 ): Promise<Response> {
+  // Refuse path traversal and anything outside the closed allowlist.
+  const baseSuffix = suffix.split("?")[0] ?? suffix
+  if (baseSuffix.includes("..") || baseSuffix.includes("//") || baseSuffix.includes("\\")) {
+    return Response.json({ error: "forbidden path" }, { status: 403 })
+  }
+  const firstSeg = "/" + (baseSuffix.replace(/^\//, "").split("/")[0] ?? "")
+  if (!PROXY_SUFFIX_ALLOW.has(firstSeg) && !PROXY_SUFFIX_ALLOW.has(baseSuffix)) {
+    return Response.json(
+      { error: `proxy path not allowed: ${baseSuffix}` },
+      { status: 403 },
+    )
+  }
+
+  const method = req.method.toUpperCase()
+  if (!["GET", "HEAD", "POST", "DELETE", "PUT", "PATCH"].includes(method)) {
+    return Response.json({ error: "method not allowed" }, { status: 405 })
+  }
+
   const s = await getSessionWorker(sessionID)
   const url = new URL(req.url)
-  const path = `/session/${encodeURIComponent(sessionID)}${suffix}${url.search}`
+  // Drop client query string except we never forward arbitrary params that
+  // could override directory — directory is set only from affinity state.
+  const path = `/session/${encodeURIComponent(sessionID)}${baseSuffix}`
+  // Do not forward client headers (Authorization, Cookie, Host, …) to the
+  // unauthenticated worker API — only content-type when a body is present.
+  const headers = new Headers()
+  const ct = req.headers.get("content-type")
+  if (ct) headers.set("content-type", ct)
+
   const init: RequestInit & { directory?: string | null } = {
-    method: req.method,
+    method,
     directory: s.directory,
-    headers: req.headers,
+    headers,
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
+  if (method !== "GET" && method !== "HEAD") {
     init.body = await req.arrayBuffer()
   }
-  const upstream = await forwardJSON(s.url, path, init)
+  // Preserve only safe search params (none that set directory).
+  const safeSearch = new URLSearchParams()
+  for (const [k, v] of url.searchParams) {
+    if (k.toLowerCase() === "directory") continue
+    safeSearch.set(k, v)
+  }
+  const qs = safeSearch.toString()
+  const upstream = await forwardJSON(s.url, path + (qs ? `?${qs}` : ""), init)
   return new Response(upstream.body, {
     status: upstream.status,
     headers: {

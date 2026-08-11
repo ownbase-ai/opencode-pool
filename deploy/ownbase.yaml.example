@@ -57,3 +57,10 @@
       - OPENCODE_REPLICAS=4
       - OPENCODE_SERVICE=opencode
       - OPENCODE_PORT=4096
+      - WORKSPACE_ROOT=/workspaces
+    # Bearer token for every /v1 route. /health stays open for OwnBase probes.
+    # Generate once, then: ownbasectl secrets set <base> harness HARNESS_TOKEN=...
+    generated_secrets:
+      - type: password
+        key: HARNESS_TOKEN
+        length: 48
