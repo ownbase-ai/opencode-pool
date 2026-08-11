@@ -1,4 +1,5 @@
 import { HOST, PORT, OPENCODE_REPLICAS } from "./config"
+import { requireAuth } from "./auth"
 import { sql } from "./db/client"
 import { startHealthLoop, stopHealthLoop, listWorkers, setDraining } from "./workers/registry"
 import {
@@ -44,8 +45,8 @@ async function route(req: Request): Promise<Response> {
   const method = req.method.toUpperCase()
 
   if (method === "GET" && pathname === "/health") {
-    // OwnBase gates start on 2xx. Report worker stats but only fail when DB is down —
-    // workers are a separate service and may still be rolling when we come up.
+    // OwnBase gates start on 2xx. Unauthenticated on purpose — probe has no
+    // token. Report worker stats but only fail when DB is down.
     try {
       await sql`SELECT 1`
       const workers = await listWorkers()
@@ -60,6 +61,12 @@ async function route(req: Request): Promise<Response> {
       console.error("health db", err)
       return Response.json({ healthy: false, error: "database unavailable" }, { status: 503 })
     }
+  }
+
+  // Everything under /v1 requires Bearer HARNESS_TOKEN (fail-closed).
+  if (pathname === "/v1" || pathname.startsWith("/v1/")) {
+    const denied = requireAuth(req)
+    if (denied) return denied
   }
 
   if (method === "GET" && pathname === "/v1/workers") {

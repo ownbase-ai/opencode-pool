@@ -30,6 +30,19 @@ export const HEALTH_INTERVAL_MS = intEnv("HEALTH_INTERVAL_MS", 10_000)
 /** Lease TTL for an in-flight prompt. */
 export const LEASE_TTL_MS = intEnv("LEASE_TTL_MS", 30 * 60_000)
 
+/**
+ * Bearer token for every /v1 route. Fail-closed: empty means the management
+ * API refuses all callers (OwnBase health still uses unauthenticated /health).
+ * Deliver via OwnBase secret HARNESS_TOKEN.
+ */
+export const HARNESS_TOKEN = process.env.HARNESS_TOKEN ?? ""
+
+/**
+ * Absolute root under which session directories must live. Create-session and
+ * proxy refuse paths outside this tree (no /, no ~/.ssh, no host escapes).
+ */
+export const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/workspaces"
+
 export function workerURL(idx: number): string {
   return `http://ownbase-${OPENCODE_SERVICE}-${idx}:${OPENCODE_PORT}`
 }
